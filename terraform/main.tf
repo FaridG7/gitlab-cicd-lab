@@ -137,6 +137,9 @@ resource "libvirt_domain" "terraform-lab" {
             network = "default"
           }
         }
+        wait_for_ip = {
+          source = "lease"
+        }
       }
     ]
     consoles = [
@@ -149,9 +152,4 @@ resource "libvirt_domain" "terraform-lab" {
       }
     ]
   }
-}
-
-output "vm_ip" {
-  description = "IP address assigned to the VM"
-  value       = libvirt_domain.terraform-lab.devices.interfaces[0].ip
 }
