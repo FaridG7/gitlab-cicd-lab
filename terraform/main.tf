@@ -145,6 +145,9 @@ resource "libvirt_domain" "terraform-lab" {
             network = "default"
           }
         }
+        wait_for_ip = {
+          source = "agent"
+        }
       }
     ]
     consoles = [
