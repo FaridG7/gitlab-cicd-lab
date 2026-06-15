@@ -1,19 +1,4 @@
-- name: Install dependencies
-  become: true
-  ansible.builtin.package:
-    name:
-      - git
-      - acl
-
-- name: Ensure web user exists
-  become: true
-  ansible.builtin.user:
-    name: "{{ web_user }}"
-    system: true
-    shell: /usr/sbin/nologin
-    create_home: false
-
-- name: Ensure deploy directory exists and is owned by web user
+- name: Ensure deploy directory exists
   become: true
   ansible.builtin.file:
     path: "{{ deploy_dir }}"
@@ -22,20 +7,41 @@
     group: "{{ web_user }}"
     mode: "0755"
 
-- name: Pull latest code from repo
-  become: true
-  become_user: "{{ web_user }}"
-  ansible.builtin.git:
-    repo: "{{ repo_url }}"
-    dest: "{{ deploy_dir }}"
-    version: "{{ repo_branch }}"
-    update: true
-    clone: true
+- name: Sync app files to VM
+  ansible.posix.synchronize:
+    src: "{{ playbook_dir }}/../app/"
+    dest: "{{ deploy_dir }}/"
+    delete: true
+    rsync_opts:
+      - "--exclude=node_modules"
+      - "--exclude=.git"
+      - "--exclude=.env"
 
-- name: Set correct file permissions
+- name: Copy .env file (only if it does not already exist)
   become: true
-  ansible.builtin.file:
-    path: "{{ deploy_dir }}"
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../app/.env.example"
+    dest: "{{ deploy_dir }}/.env"
     owner: "{{ web_user }}"
     group: "{{ web_user }}"
-    recurse: true
+    mode: "0640"
+    force: false
+
+- name: Install npm dependencies
+  community.general.npm:
+    path: "{{ deploy_dir }}"
+    state: present
+
+- name: Start or restart app with pm2
+  ansible.builtin.shell:
+    cmd: >
+      pm2 describe app > /dev/null 2>&1
+      && pm2 restart app --update-env
+      || pm2 start src/index.js --name app
+    chdir: "{{ deploy_dir }}"
+  changed_when: true
+
+- name: Save pm2 process list
+  ansible.builtin.command:
+    cmd: pm2 save
+  changed_when: true

@@ -4,13 +4,19 @@
   roles:
     - base
 
-- name: Configure nginx
+- name: Install application dependencies
   hosts: webservers
   become: true
   roles:
-    - nginx
+    - node
 
 - name: Deploy application
   hosts: webservers
   roles:
     - deploy
+
+- name: Install and configure nginx
+  hosts: webservers
+  become: true
+  roles:
+    - nginx

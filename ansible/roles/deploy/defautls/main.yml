@@ -1,4 +1,0 @@
-deploy_dir: /var/www/html/dummy-website
-web_user: www-data
-repo_url: ""
-repo_branch: master

@@ -3,7 +3,6 @@
     name:
       - nginx
       - openssl
-    state: latest
 
 - name: Ensure nginx is started and enabled
   ansible.builtin.service:
@@ -28,7 +27,7 @@
     creates: /etc/nginx/certs/default.crt
 
 - name: Sync nginx config directory
-  ansible.builtin.synchronize:
+  ansible.posix.synchronize:
     src: "{{ role_path }}/files/nginx/"
     dest: /etc/nginx/
     delete: true
@@ -38,4 +37,3 @@
     rsync_opts:
       - "--exclude=certs"
   notify: Reload nginx
-
