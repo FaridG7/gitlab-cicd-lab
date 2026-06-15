@@ -29,6 +29,13 @@ resource "libvirt_cloudinit_disk" "init" {
     hostname    = var.vm.hostname
     instance_id = var.vm.hostname
   })
+
+  network_config = templatefile("${path.module}/network-config.tftpl", {
+    mac_address = var.vm.mac_address
+    ip_address  = var.vm.ip_address
+    gateway     = var.vm.gateway
+    dns         = var.vm.dns
+  })
 }
 
 resource "libvirt_volume" "cloudinit" {
@@ -129,6 +136,7 @@ resource "libvirt_domain" "terraform-lab" {
     ]
     interfaces = [
       {
+        mac = { address = var.vm.mac_address }
         model = {
           type = "virtio"
         }
@@ -136,9 +144,6 @@ resource "libvirt_domain" "terraform-lab" {
           network = {
             network = "default"
           }
-        }
-        wait_for_ip = {
-          source = "lease"
         }
       }
     ]
