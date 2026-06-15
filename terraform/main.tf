@@ -156,5 +156,19 @@ resource "libvirt_domain" "terraform-lab" {
         }
       }
     ]
+    channels = [
+      {
+        source = {
+          unix = {
+            mode = "bind"
+          }
+        }
+        target = {
+          virt_io = {
+            name = "org.qemu.guest_agent.0"
+          }
+        }
+      }
+    ]
   }
 }
