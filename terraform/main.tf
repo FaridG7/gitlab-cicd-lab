@@ -89,8 +89,8 @@ resource "libvirt_volume" "root_disk" {
   }
 }
 # Basic VM configuration
-resource "libvirt_domain" "terraform-lab" {
-  name        = "terraform-lab"
+resource "libvirt_domain" "webserver-vm" {
+  name        = "webserver-vm"
   memory      = 4096
   memory_unit = "MiB"
   vcpu        = 4
