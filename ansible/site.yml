@@ -1,0 +1,16 @@
+- name: Base setup
+  hosts: all
+  become: true
+  roles:
+    - base
+
+- name: Configure nginx
+  hosts: webservers
+  become: true
+  roles:
+    - nginx
+
+- name: Deploy application
+  hosts: webservers
+  roles:
+    - deploy

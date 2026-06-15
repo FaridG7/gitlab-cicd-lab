@@ -1,0 +1,41 @@
+- name: Install nginx and openssl
+  ansible.builtin.package:
+    name:
+      - nginx
+      - openssl
+    state: latest
+
+- name: Ensure nginx is started and enabled
+  ansible.builtin.service:
+    name: nginx
+    state: started
+    enabled: true
+
+- name: Ensure certs directory exists
+  ansible.builtin.file:
+    path: /etc/nginx/certs
+    state: directory
+    mode: "0755"
+
+- name: Generate self-signed certificate
+  ansible.builtin.command:
+    cmd: >
+      openssl req -x509 -nodes -days 365
+      -newkey rsa:2048
+      -keyout /etc/nginx/certs/default.key
+      -out /etc/nginx/certs/default.crt
+      -subj "/CN=localhost"
+    creates: /etc/nginx/certs/default.crt
+
+- name: Sync nginx config directory
+  ansible.builtin.synchronize:
+    src: "{{ role_path }}/files/nginx/"
+    dest: /etc/nginx/
+    delete: true
+    recursive: true
+    owner: true
+    group: true
+    rsync_opts:
+      - "--exclude=certs"
+  notify: Reload nginx
+
