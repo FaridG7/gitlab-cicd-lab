@@ -15,6 +15,7 @@ stages:
 
 variables:
   ANSIBLE_FORCE_COLOR: "true"
+  ANSIBLE_HOST_KEY_CHECKING: "false"
 
 deploy:
   stage: deploy
@@ -25,7 +26,6 @@ deploy:
     - mkdir -p ~/.ssh && chmod 700 ~/.ssh
     - echo "$ENCODED_DEPLOY_SSH_KEY" | base64 -d | tr -d '\r' > ~/.ssh/id_rsa
     - chmod 600 ~/.ssh/id_rsa
-    - echo "$DEPLOY_HOST_KEYS" >> ~/.ssh/known_hosts
     - chmod 644 ~/.ssh/known_hosts
   script:
     - ansible-playbook -i ansible/inventory/hosts.yml ansible/site.yml
