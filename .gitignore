@@ -1,5 +1,2 @@
 repomix-output.xml
-
-# SSH deploy keys must never be committed — they are injected via the
-# ENCODED_DEPLOY_SSH_KEY CI/CD variable instead.
 ci/keys/
