@@ -1,0 +1,13 @@
+# Copy this file to terraform.tfvars and fill in your values.
+# terraform.tfvars is gitignored — keep your real IP/MAC here, not in version control.
+
+vm = {
+  hostname    = "ubuntu-vm"
+  mac_address = "52:54:00:5b:62:06"   # virtio NIC MAC; must be unique on the network
+  ip_address  = "192.168.122.100"      # within the libvirt default (192.168.122.0/24) range
+  gateway     = "192.168.122.1"
+  dns         = "192.168.122.1"
+}
+
+# Public key to authorize for the 'ubuntu' user inside the VM.
+ssh_public_key_path = "~/.ssh/id_rsa.pub"

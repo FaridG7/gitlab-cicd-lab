@@ -1,92 +1,129 @@
-# DevOps Home Lab: GitLab CI/CD (Infrastructure)
+# Self-hosted GitLab + Runner
 
-This repository contains the `Dockerfile` and `docker-compose.yml` configurations used during my DevOps practices.
+The CI/CD backend for the [gitlab-cicd-lab](../README.md) project. Runs **GitLab CE** and a **GitLab Runner** as Docker Compose services on the host, so the pipeline can deploy to the local libvirt VM without needing a public IP or a cloud account.
 
-> **Note:** If you are looking for the primary project code repository, you can find it [here](https://github.com/FaridG7/DevOps-Practice-1).
-
-### Infrastructure Overview
-
-The `docker-compose.yml` includes service definitions for:
-
-- **GitLab:** A self-hosted GitLab instance.
-- **GitLab Runner:** Configured for CI/CD pipelines.
-- **Apache & Alpine (Rsync):** A web server setup with a shared volume to facilitate file synchronization via rsync.
+> This is the **CI server** in the architecture diagram. The runner executes the `.gitlab-ci.yml` deploy job from the repository root.
 
 ---
 
+## What's Here
+
+```
+gitlab/
+├── docker-compose.yaml   # gitlab + runner1 services
+├── example.env           # template — copy to .env
+└── .env                  # YOUR values (gitignored)
+```
+
+`docker-compose.yaml` defines two services:
+
+- **`gitlab`** — `gitlab/gitlab-ce`, exposed on host ports `80`/`443`/`22`, three named volumes for config/logs/data, Prometheus monitoring disabled (saves RAM on a home-lab host), and a health check against `/-/health`.
+- **`runner1`** — `gitlab/gitlab-runner`, mounts the Docker socket so jobs can run containers, with a `gitlab-runner verify` health check.
+
+## Prerequisites
+
+- **Docker** and **Docker Compose** (v2 / `docker compose`) on the host.
+- Enough RAM — GitLab CE is heavy; ~4 GB free is a sensible minimum.
+
 ## Getting Started
 
-### Prerequisites
-
-- Docker and Docker Compose installed.
-- Basic knowledge of Linux terminal operations.
-
-### Setup Instructions
-
-1. **Initialize Environment:**
-   Copy the example configuration to create your local `.env` file:
+**1. Create your `.env`**
 
 ```bash
 cp example.env .env
 ```
 
-1. **(Optional) Customize COnfigurations:**
-   Edit the .`env` file to adjust hostnames or environment varables:
+Defaults:
 
-```bash
-vim .env
+```env
+GITLAB_TAG=18.10.5-ce.0
+GITLAB_HOSTNAME="gitlab.local"
+
+RUNNER_TAG=v18.11.3
+RUNNER_HOSTNAME=runner1.local
 ```
 
-1. **Launch the Services:**
+Adjust the image tags or hostname if you like, then bring it up:
 
 ```bash
 docker compose up -d
 ```
 
-1. **Verify Status:Ensure all containers are running and healthy:**
+GitLab takes a few minutes to become healthy. Watch it:
 
 ```bash
 docker compose ps
 ```
 
-1. **Configure Local Hosts:Map the GitLab hostname to your local machine** (replace \<gitlab-hostname\> with the value defined in your .env):
+**2. Point your host at the GitLab hostname**
 
 ```bash
-echo "127.0.0.1 <gitlab-hostname>" | sudo tee -a /etc/hosts
+echo "127.0.0.1 gitlab.local" | sudo tee -a /etc/hosts
 ```
 
----
+Open `http://gitlab.local` in your browser.
 
 ## GitLab Runner Configuration
 
-To enable CI/CD functionality, follow these steps to register your runner:
+GitLab is up, but the runner isn't registered yet — it can't pick up jobs until it is.
 
-### 1. Retrieve GitLab Credentials
-
-Get the initial root password to access the web interface:
+### 1. Get the initial root password
 
 ```bash
 docker compose exec gitlab cat /etc/gitlab/initial_root_password
 ```
 
-### 2. Register the Runner
+Log in to GitLab at `http://gitlab.local` as `root` with that password.
 
-- Navigate to your GitLab instance in your browser and log in with the `root` account.
-- Follow the [Official GitLab Instructions](https://docs.gitlab.com/ci/runners/runners_scope/#create-an-instance-runner-with-a-runner-authentication-token) to generate your registration token.
+### 2. Create a registration token
 
-### 3. Update Runner Configuration
+Follow the [official GitLab docs](https://docs.gitlab.com/ci/runners/runners_scope/#create-an-instance-runner-with-a-runner-authentication-token) to create an instance runner and copy the **runner authentication token**.
 
-Because this runner operates within a Docker Compose network, you must ensure it can communicate with the GitLab container. Add the network mode to the runner configuration:
+Register it inside the runner container:
+
+```bash
+docker compose exec runner1 gitlab-runner register \
+  --url http://gitlab.local \
+  --token <your-runner-authentication-token> \
+  --executor docker \
+  --docker-image python:3.12-slim
+```
+
+### 3. Use host networking so the runner can reach the VM
+
+The VM lives on the `192.168.122.0/24` libvirt bridge, which is only reachable from the host network. Add host networking to the runner's config so its job containers can SSH to the VM:
 
 ```bash
 docker compose exec runner1 sh -c 'echo "network_mode = \"host\"" >> /etc/gitlab-runner/config.toml'
+docker compose restart runner1
 ```
 
-### 4. (Optional) Custom Helper Image
+### 4. (Optional) Custom helper image
 
-If you are located in a region with restricted access to `registry.gitlab.com`, specify a mirror/helper image from Docker Hub:
+If you're in a region where `registry.gitlab.com` is blocked, point the runner at the Docker Hub helper image:
 
 ```bash
-# Update the helper_image path accordingly
 docker compose exec runner1 sh -c 'echo "helper_image = \"gitlab/gitlab-runner-helper:x86_64-v18.11.3\"" >> /etc/gitlab-runner/config.toml'
+```
+
+## Verifying the Setup
+
+```bash
+docker compose ps                 # both services should be "healthy"
+docker compose exec runner1 gitlab-runner verify   # runner talks to GitLab
+```
+
+Once a project is created and the CI/CD variables from the [root README](../README.md#4--configure-the-cicd-variables) are set, push to the default branch and the `deploy` job will run here.
+
+## Notes
+
+- **RAM usage** — Prometheus is disabled (`prometheus_monitoring['enable'] = false`) specifically to keep memory footprint down for a home lab. Re-enable it if you want built-in monitoring.
+- **Persistence** — `gitlab_config`, `gitlab_logs`, `gitlab_data`, and `runner1_config` are named volumes, so `docker compose down` preserves state. Use `docker compose down -v` to wipe everything.
+- **HTTPS** — GitLab itself serves over plain HTTP in this lab. The TLS termination that matters (for the deployed app) is done by Nginx on the VM, not here.
+
+## Teardown
+
+```bash
+docker compose down        # stop, keep data
+docker compose down -v     # stop and delete all volumes (irreversible)
 ```

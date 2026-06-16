@@ -1,192 +1,170 @@
-# Ansible Nginx Provisioner
+# Ansible — Provisioning & Deploy Playbook
 
-An Ansible-based infrastructure automation project that provisions a production-ready Nginx web server on a local virtual machine, including automated application deployment from a Git repository.
+The Ansible side of the [gitlab-cicd-lab](../README.md) pipeline. A single playbook (`site.yml`) takes a fresh Ubuntu VM from the Terraform stage and turns it into a running Node.js app behind a security-hardened Nginx reverse proxy.
 
-> **Learning objectives:** Infrastructure as Code (IaC), Ansible role design, Nginx hardening, local VM provisioning with Vagrant + libvirt/KVM.
-> Built as part of the [roadmap.sh Configuration Management project](https://roadmap.sh/projects/configuration-management), with several extensions beyond the base requirements.
+> This is the **deploy** stage of the pipeline. GitLab CI invokes `ansible-playbook site.yml` against the VM at `192.168.122.100`. It can also be run by hand for local iteration.
 
 ---
 
-## Overview
-
-This project automates the full setup of a secure, performant Nginx web server using Ansible. Starting from a bare Ubuntu 24.04 VM (managed via Vagrant and libvirt/KVM), the playbook handles everything: system updates, Nginx installation and hardening, TLS certificate generation, and deploying a web application directly from a GitHub repository.
-
-The Nginx configuration is based on the [h5bp/server-configs-nginx](https://github.com/h5bp/server-configs-nginx) project — a community-maintained collection of best-practice server configs focused on security headers, performance optimizations, and correct MIME type handling.
-
-This project was built following the [roadmap.sh Configuration Management](https://roadmap.sh/projects/configuration-management) prompt, which calls for a `base` role, an `nginx` role, and an application deployment role. This implementation goes beyond those requirements by adding a local Vagrant + KVM environment (instead of a cloud VM), a hardened h5bp Nginx configuration, self-signed TLS with HTTPS redirect, and a Git-based deploy role with proper system user isolation.
-
-## Architecture
-
-```
-site.yml                    # Main playbook entry point
-├── roles/
-│   ├── base/               # OS-level updates (apt/dnf)
-│   ├── nginx/              # Nginx install, config sync, TLS setup
-│   └── deploy/             # Git-based app deployment
-└── inventory/
-    ├── hosts.yml           # Target host definitions
-    └── group_vars/         # Per-group variable overrides
-```
-
-**Provisioning flow:**
-
-```
-Vagrant VM (Ubuntu 24.04, libvirt/KVM)
-        ↓
-  [base] System package upgrades
-        ↓
-  [nginx] Install Nginx + OpenSSL → sync hardened config → generate self-signed cert → reload
-        ↓
-  [deploy] Install git → create web user → clone app repo → set file permissions
-```
-
 ## What It Does
 
-**Base role** — Updates all system packages using `apt` (Debian) or `dnf` (RedHat), keeping the OS-family detection generic for portability.
+Four roles, run in order:
 
-**Nginx role** — Installs Nginx and OpenSSL, generates a self-signed TLS certificate, then syncs a complete hardened Nginx configuration including:
+```
+site.yml
+├── [base]   hosts: all         → full apt/dnf package upgrade
+├── [node]   hosts: webservers  → Node.js + npm + pm2 (global), pm2 systemd startup
+├── [deploy] hosts: webservers  → rsync app/ → /opt/app, npm install, pm2 restart
+└── [nginx]  hosts: webservers  → Nginx + OpenSSL, self-signed cert, hardened config, reload
+```
 
-- Security headers: `Content-Security-Policy`, `Strict-Transport-Security`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, and Cross-Origin policies (COEP/COOP/CORP)
-- TLS configuration with session caching, OCSP stapling, and TLSv1.2/1.3 cipher policies (balanced and strict profiles)
-- Gzip compression with fine-grained MIME type control
-- Cache expiration rules and `Cache-Control` directives mapped per content type
-- CORS configuration for fonts and images
-- Filename-based cache busting and file descriptor caching
-- Protection against host-header attacks via a default `444` catch-all server block
-- Hidden file and sensitive file access denial
+### `base`
+Generic OS hardening first step — upgrades every package with `apt` (Debian) or `dnf` (RedHat), guarded by `ansible_os_family` so the role stays portable.
 
-**Deploy role** — Creates a dedicated unprivileged system user (`www-data`), ensures the deployment directory exists with correct ownership, clones (or pulls) the application from a configurable Git repository, and enforces file permissions recursively.
+### `node`
+Installs `nodejs` + `npm` from apt, then `pm2` globally. Generates a per-user systemd unit via `pm2 startup` so managed Node processes survive reboots. Idempotent: it checks whether the `pm2-<user>.service` unit already exists before regenerating it.
 
-## Tech Stack
+### `deploy`
+Pushes the application to the VM and keeps it running:
+- Ensures `{{ deploy_dir }}` (`/opt/app`) exists, owned by `{{ web_user }}` (`ubuntu`).
+- `ansible.posix.synchronize` (rsync) copies `app/` into the deploy dir, excluding `node_modules`, `.git`, and `.env`.
+- Copies `app/.env.example` → `deploy_dir/.env` with `force: false`, so an existing `.env` is **never overwritten** by deploys.
+- Runs `npm install` (via `community.general.npm`).
+- Restarts the app under pm2 (`pm2 restart app --update-env`, falling back to `pm2 start`), then `pm2 save`.
 
-- **Ansible** — Playbook orchestration and role management
-- **Vagrant** — Local VM lifecycle management
-- **libvirt / KVM** — Hypervisor backend for the development VM
-- **Nginx** — Web server (h5bp hardened configuration)
-- **OpenSSL** — Self-signed TLS certificate generation
-- **Ubuntu 24.04** — Target OS (cloud image via custom Packer box)
+### `nginx`
+Installs `nginx` + `openssl`, generates a self-signed TLS cert (gated by `creates:` so it's only done once), then `synchronize`s the full hardened config tree to `/etc/nginx/` and notifies a reload handler. The config is a vendored, lightly-customized copy of [h5bp/server-configs-nginx](https://github.com/h5bp/server-configs-nginx).
+
+The active vhost is `conf.d/node-app.local.conf`: an HTTP→HTTPS redirect plus an HTTPS server block that reverse-proxies to the Node upstream at `127.0.0.1:3000`, with WebSocket/keepalive headers and the h5bp security rules.
 
 ## Prerequisites
 
-- Ansible installed on your control machine
-- Vagrant with the `vagrant-libvirt` plugin
-- KVM/libvirt on the host machine
-- SSH access configured (Vagrant handles this automatically)
+The target VM must already be up — provision it with [Terraform](../terraform/README.md) first. From the control machine:
+
+- **Ansible** (`ansible-core` 2.18) with two collections: `ansible.posix` and `community.general`. The CI image installs these; for local runs do:
+  ```bash
+  ansible-galaxy collection install ansible.posix community.general
+  ```
+- **rsync** on the control machine (used by `synchronize`).
+- **SSH access** to the VM as `ubuntu` with your key.
 
 ## Getting Started
 
-**1. Start the VM**
-
-```bash
-vagrant up
-```
-
-**2. Run the full playbook**
+Run the whole playbook against the VM:
 
 ```bash
 ansible-playbook -i inventory/hosts.yml site.yml
 ```
 
-**3. Run a specific role only**
+Run a single role with tags:
 
 ```bash
-# Nginx only
-ansible-playbook -i inventory/hosts.yml site.yml --tags nginx
-
-# Deploy only
+ansible-playbook -i inventory/hosts.yml site.yml --tags node
 ansible-playbook -i inventory/hosts.yml site.yml --tags deploy
+ansible-playbook -i inventory/hosts.yml site.yml --tags nginx
 ```
 
-**4. Verify Nginx on the VM**
+Check what would change (no-op):
 
 ```bash
-vagrant ssh test
-curl -k https://dummy-website.local
+ansible-playbook -i inventory/hosts.yml site.yml --check --diff
+```
+
+Verify the result:
+
+```bash
+curl -k https://node-app.local      # → Hello, World!
+# (add `192.168.122.100 node-app.local` to /etc/hosts first)
+```
+
+## Inventory
+
+`inventory/hosts.yml` defines one host, `webserver1`, in the `webservers` group:
+
+```yaml
+all:
+  hosts:
+    webserver1:
+      ansible_host: 192.168.122.100
+      ansible_user: ubuntu
+      ansible_ssh_private_key_file: ~/.ssh/id_rsa
+  children:
+    webservers:
+      hosts:
+        webserver1:
 ```
 
 ## Configuration
 
-All tunable variables live in `inventory/group_vars/`:
+Tunable variables live in `inventory/group_vars/`:
 
-| Variable      | Default                        | Description                         |
-| ------------- | ------------------------------ | ----------------------------------- |
-| `deploy_dir`  | `/var/www/dummy-website.local` | Path where the app is deployed      |
-| `web_user`    | `www-data`                     | System user that owns the web files |
-| `repo_url`    | _(see webservers.yml)_         | Git repository URL to deploy from   |
-| `repo_branch` | `master`                       | Branch to track                     |
+| Variable      | Default     | Where                 | Description                              |
+| ------------- | ----------- | --------------------- | ---------------------------------------- |
+| `deploy_dir`  | `/opt/app`  | `webservers.yml`      | Where the app is rsynced on the VM       |
+| `web_user`    | `ubuntu`    | `webservers.yml`      | Owner of the app files + pm2 startup user|
 
-To deploy a different application, update `inventory/group_vars/webservers.yml`:
+To deploy to a different path or user, edit `inventory/group_vars/webservers.yml`:
 
 ```yaml
-repo_url: https://github.com/your-user/your-app.git
-repo_branch: main
-deploy_dir: /var/www/your-app
+deploy_dir: /opt/app
+web_user: ubuntu
 ```
-
-## VM Specification
-
-The development VM is defined in the `Vagrantfile`:
-
-| Property | Value                       |
-| -------- | --------------------------- |
-| Box      | `packer-ubuntu-cloud-24.04` |
-| IP       | `192.168.47.10`             |
-| Memory   | 8192 MB                     |
-| CPUs     | 4                           |
-| Provider | libvirt (KVM)               |
-
-## Key Learning Outcomes
-
-- Structuring Ansible projects with reusable, single-responsibility roles
-- Using `ansible.builtin.synchronize` to manage config file trees idempotently
-- Nginx security hardening with modern HTTP security headers
-- TLS setup and self-signed certificate generation via Ansible tasks
-- Idempotent Git-based deployment with correct file ownership and permissions
-- Vagrant + libvirt integration for reproducible local infrastructure
 
 ## Project Structure
 
 ```
-.
+ansible/
+├── site.yml                        # Playbook entry point (4 plays)
 ├── inventory/
-│   ├── hosts.yml               # Host inventory
+│   ├── hosts.yml                   # webserver1 @ 192.168.122.100
 │   └── group_vars/
-│       ├── all.yml             # Global variables
-│       └── webservers.yml      # Web server group variables
-├── roles/
-│   ├── base/
-│   │   └── tasks/main.yml      # Package upgrades
-│   ├── nginx/
-│   │   ├── files/nginx/        # Full Nginx config tree (h5bp-based)
-│   │   ├── handlers/main.yml   # Nginx reload handler
-│   │   └── tasks/main.yml      # Install, configure, cert generation
-│   └── deploy/
-│       ├── defaults/main.yml   # Default variable values
-│       └── tasks/main.yml      # Git deploy tasks
-├── site.yml                    # Main playbook
-└── Vagrantfile                 # VM definition
+│       ├── all.yml                 # (empty — reserved for globals)
+│       └── webservers.yml          # deploy_dir, web_user
+└── roles/
+    ├── base/tasks/main.yml         # apt/dnf upgrade
+    ├── node/tasks/main.yml         # Node.js + pm2 + systemd startup
+    ├── deploy/
+    │   ├── defaults/main.yml       # deploy_dir default
+    │   └── tasks/main.yml          # rsync, npm, pm2 restart
+    └── nginx/
+        ├── tasks/main.yml          # install, cert, sync config, reload
+        ├── handlers/main.yml       # nginx reload handler
+        └── files/nginx/            # full h5bp-derived config tree
+            ├── nginx.conf
+            ├── conf.d/
+            │   ├── node-app.local.conf   # ← active reverse-proxy vhost
+            │   ├── default.conf          # HTTPS 444 catch-all
+            │   ├── no-ssl.default.conf   # HTTP 444 catch-all
+            │   └── templates/            # example.com reference vhosts
+            └── h5bp/                     # security/tls/performance snippets
 ```
+
+## The Nginx Configuration (h5bp)
+
+`roles/nginx/files/nginx/` is a vendored copy of [h5bp/server-configs-nginx](https://github.com/h5bp/server-configs-nginx) (MIT). It provides:
+
+- **Security headers** — CSP, HSTS, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy, and Cross-Origin policies (COEP/COOP/CORP), applied per-content-type via `map` directives.
+- **TLS** — session caching/tickets, OCSP stapling config, and balanced/strict cipher policies (TLS 1.2/1.3).
+- **Performance** — gzip with fine-grained MIME types, cache expiration and `Cache-Control` per content type, filename-based cache busting, file-descriptor caching.
+- **Hardening** — `server_tokens off`, default `444` catch-all server blocks against host-header attacks, hidden-file and sensitive-file access denial.
+
+The custom addition is **`conf.d/node-app.local.conf`**, which adds the Node.js reverse proxy described above. See `files/nginx/README.md` for the upstream h5bp documentation.
+
+## Key Learning Outcomes
+
+- Designing reusable, single-responsibility Ansible roles and composing them in one playbook.
+- Idempotency patterns: `creates:` for cert generation, `force: false` for `.env`, `stat`-gated systemd setup.
+- Using `ansible.posix.synchronize` to push an app tree efficiently with rsync excludes.
+- Nginx reverse-proxy hardening — TLS termination, security headers, and a default-server catch-all.
+- Process management with pm2 wired into systemd for boot-time startup.
 
 ## Possible Extensions
 
-**Replace static config files with Jinja2 templates**
-The current nginx role uses `ansible.builtin.synchronize` to push a pre-written config tree. A natural next step is converting the server block configs into Jinja2 templates (`.conf.j2`) rendered with `ansible.builtin.template`. This would let you drive values like `server_name`, `root`, TLS cert paths, and security header policies directly from inventory variables — making the role truly reusable across different hosts without touching any config files.
-
-**Add an `ssh` role**
-The original roadmap.sh prompt includes an `ssh` role for adding authorized public keys to the server. This would use `ansible.builtin.authorized_key` and could also harden `sshd_config` (disable root login, enforce key-only auth, change the default port).
-
-**Let's Encrypt / Certbot integration**
-Replace the self-signed certificate with a real one via Certbot. An `ssl` role could use `community.crypto` or the `certbot` CLI to obtain and auto-renew Let's Encrypt certificates, then notify the nginx handler to reload on renewal.
-
-**Add a `fail2ban` role**
-The roadmap.sh spec mentions `fail2ban` as part of the base setup. Adding a dedicated role to install and configure it — with jail rules for Nginx and SSH — would round out the security story significantly.
-
-**Multi-host inventory and staging environments**
-Extend the inventory to support multiple environments (e.g. `staging` and `production`) with separate `group_vars`. This would demonstrate environment-specific variable overrides, a common pattern in real-world Ansible usage.
-
-**Molecule tests**
-Add [Molecule](https://ansible.readthedocs.io/projects/molecule/) with a Docker driver to write automated tests for each role. This is the standard approach to CI-testing Ansible roles and would make the project much stronger as a portfolio piece.
+- **Jinja2 templates instead of static config** — drive `server_name`, `root`, and cert paths from inventory instead of committing a fixed `node-app.local.conf`.
+- **Let's Encrypt via Certbot** — replace the self-signed cert with a real one and auto-renewal, using `community.crypto` or the `certbot` CLI.
+- **Molecule tests** — add [Molecule](https://ansible.readthedocs.io/projects/molecule/) with a Docker driver to CI-test each role.
+- **Multi-environment inventory** — split `staging`/`production` with separate `group_vars`.
 
 ## License
 
-The Nginx configuration files under `roles/nginx/files/nginx/` are derived from [h5bp/server-configs-nginx](https://github.com/h5bp/server-configs-nginx) and are licensed under the [MIT License](roles/nginx/files/nginx/LICENSE.txt). All other project files are available under the MIT License as well.
+The Nginx configuration files under `roles/nginx/files/nginx/` are derived from [h5bp/server-configs-nginx](https://github.com/h5bp/server-configs-nginx) and licensed under the [MIT License](roles/nginx/files/nginx/LICENSE.txt). All other files in this directory are MIT-licensed as well.
