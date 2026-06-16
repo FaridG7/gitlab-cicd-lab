@@ -1,0 +1,32 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# GitLab CI – Deploy Node.js app via Ansible
+#
+# Required CI/CD variables  (Settings → CI/CD → Variables):
+#   ENCODED_DEPLOY_SSH_KEY      Private key matching the public key on the target VM.
+#                               Type: Variable, masked.
+#   DEPLOY_HOST_KEYS            Output of a one-time manual `ssh-keyscan 192.168.122.100`
+#                               run after confirming the target's identity.
+#                               Type: Variable, masked.
+# ─────────────────────────────────────────────────────────────────────────────
+
+stages:
+  - deploy
+
+variables:
+  ANSIBLE_FORCE_COLOR: "true"
+  ANSIBLE_HOST_KEY_CHECKING: "false"
+
+deploy:
+  stage: deploy
+  image: python:3.12-slim
+  before_script:
+    - apt-get update && apt-get install -y --no-install-recommends rsync openssh-client
+    - pip install --no-cache-dir "ansible-core==2.18.*"
+    - mkdir -p ~/.ssh && chmod 700 ~/.ssh
+    - echo "$ENCODED_DEPLOY_SSH_KEY" | base64 -d | tr -d '\r' > ~/.ssh/id_rsa
+    - chmod 600 ~/.ssh/id_rsa
+  script:
+    - ansible-playbook -i ansible/inventory/hosts.yml ansible/site.yml
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
