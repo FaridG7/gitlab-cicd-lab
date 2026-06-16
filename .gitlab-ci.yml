@@ -1,58 +1,34 @@
 # ─────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 # GitLab CI – Deploy Node.js app via Ansible
 #
 # Required CI/CD variables  (Settings → CI/CD → Variables):
-#   ENCODED_DEPLOY_SSH_KEY   Private key that matches the public key injected into the
-#                    target VM via cloud-init / Terraform. Mark it as "File"
-#                    type and masked. Ansible's inventory already points to
-#                    ~/.ssh/id_rsa, so the before_script writes it there.
-#
-# Optional variable:
-#   BUILD_ANSIBLE_IMAGE   Set to "true" to force a rebuild of the runner image
-#                         (e.g. when updating Ansible or collections without
-#                         touching the Dockerfile).
+#   ENCODED_DEPLOY_SSH_KEY      Private key matching the public key on the target VM.
+#                               Type: Variable, masked.
+#   DEPLOY_HOST_KEYS            Output of a one-time manual `ssh-keyscan 192.168.122.100`
+#                               run after confirming the target's identity.
+#                               Type: Variable, masked.
 # ─────────────────────────────────────────────────────────────────────────────
 
 stages:
-  - build
   - deploy
 
 variables:
   ANSIBLE_FORCE_COLOR: "true"
-  ANSIBLE_HOST_KEY_CHECKING: "false"
-  ANSIBLE_RUNNER_IMAGE: $CI_REGISTRY_IMAGE/ansible-runner:latest
-
-build:ansible-image:
-  stage: build
-  image: docker:27
-  variables:
-    DOCKER_HOST: "unix:///var/run/docker.sock"
-  before_script:
-    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
-  script:
-    - docker build -t "$ANSIBLE_RUNNER_IMAGE" ci/ansible/
-    - docker push "$ANSIBLE_RUNNER_IMAGE"
-  rules:
-    - if: $BUILD_ANSIBLE_IMAGE == "true"
-    - changes:
-        - ci/ansible/Dockerfile
-        - ci/ansible/requirements.yml
-      when: always
-    - when: never
 
 deploy:
   stage: deploy
-  image: $ANSIBLE_RUNNER_IMAGE
-  needs:
-    - job: build:ansible-image
-      optional: true
+  image: python:3.12-slim
   before_script:
+    - apt-get update && apt-get install -y --no-install-recommends rsync openssh-client
+    - pip install --no-cache-dir "ansible-core==2.18.*"
+    - ansible-galaxy collection install ansible.posix community.general
     - mkdir -p ~/.ssh && chmod 700 ~/.ssh
     - echo "$ENCODED_DEPLOY_SSH_KEY" | base64 -d | tr -d '\r' > ~/.ssh/id_rsa
     - chmod 600 ~/.ssh/id_rsa
+    - echo "$DEPLOY_HOST_KEYS" >> ~/.ssh/known_hosts
+    - chmod 644 ~/.ssh/known_hosts
   script:
     - ansible-playbook -i ansible/inventory/hosts.yml ansible/site.yml
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-  environment:
-    name: production
