@@ -32,7 +32,7 @@ An end-to-end DevOps pipeline that provisions a virtual machine with Terraform, 
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                              HOST MACHINE                                │
+│                              HOST MACHINE                               │
 │                                                                         │
 │  ┌───────────────────────┐        ┌──────────────────────────────────┐  │
 │  │  Self-hosted GitLab   │        │  libvirt / KVM                   │  │
@@ -41,7 +41,7 @@ An end-to-end DevOps pipeline that provisions a virtual machine with Terraform, 
 │  │  └────────┬────────┘  │        │  │  (192.168.122.100)         │  │  │
 │  │           │           │        │  │                            │  │  │
 │  │  ┌────────▼────────┐  │ deploy │  │  ┌──────────┐ ┌─────────┐  │  │  │
-│  │  │  GitLab Runner  │──┼────────┼──►│  Nginx    │►│ Node.js │  │  │  │
+│  │  │  GitLab Runner  │──┼────────┼─►│  │ Nginx    │►│ Node.js │  │  │  │
 │  │  │  (Ansible job)  │  │  SSH   │  │  │ (HTTPS)  │ │ (pm2)   │  │  │  │
 │  │  └─────────────────┘  │        │  │  └──────────┘ └─────────┘  │  │  │
 │  └───────────────────────┘        │  └────────────────────────────┘  │  │
@@ -77,10 +77,10 @@ deploy:
 
 Two **CI/CD variables** must be defined in GitLab (Settings → CI/CD → Variables):
 
-| Variable              | Description                                                                 |
-| --------------------- | --------------------------------------------------------------------------- |
+| Variable                 | Description                                                                                                                  |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
 | `ENCODED_DEPLOY_SSH_KEY` | The deploy **private** key (`base64`-encoded so it survives the variable editor), matching the public key on the VM. Masked. |
-| `DEPLOY_HOST_KEYS`       | Output of a one-time `ssh-keyscan 192.168.122.100`, so the runner trusts the VM. Masked. |
+| `DEPLOY_HOST_KEYS`       | Output of a one-time `ssh-keyscan 192.168.122.100`, so the runner trusts the VM. Masked.                                     |
 
 > The runner needs `network_mode = "host"` in its `config.toml` so it can reach the VM on the `192.168.122.0/24` libvirt bridge — see the [GitLab README](gitlab/README.md).
 
@@ -126,16 +126,16 @@ The Nginx configuration is a hardened fork of [h5bp/server-configs-nginx](https:
 
 ## Tech Stack
 
-| Layer            | Tool                                                         | Why                                            |
-| ---------------- | ------------------------------------------------------------ | ---------------------------------------------- |
-| Infrastructure   | **Terraform** + [`dmacvicar/libvirt`](https://registry.terraform.io/providers/dmacvicar/libvirt) | Local VMs via IaC, no cloud account needed     |
-| Hypervisor       | **libvirt / KVM**                                            | Native Linux virtualization                    |
-| OS               | **Ubuntu 24.04** (cloud image)                               | cloud-init friendly, qemu-guest-agent for IPs  |
-| CI/CD            | **Self-hosted GitLab CE + GitLab Runner**                    | Runs locally; no public IP required            |
-| Config Mgmt      | **Ansible** (ansible-core 2.18)                              | Idempotent provisioning + deploy               |
-| Runtime          | **Node.js + pm2**                                            | Process manager with systemd startup           |
-| Web/Proxy        | **Nginx** (h5bp hardened)                                    | TLS termination + reverse proxy                |
-| TLS              | **OpenSSL** self-signed                                      | Local lab has no real domain                   |
+| Layer          | Tool                                                                                             | Why                                           |
+| -------------- | ------------------------------------------------------------------------------------------------ | --------------------------------------------- |
+| Infrastructure | **Terraform** + [`dmacvicar/libvirt`](https://registry.terraform.io/providers/dmacvicar/libvirt) | Local VMs via IaC, no cloud account needed    |
+| Hypervisor     | **libvirt / KVM**                                                                                | Native Linux virtualization                   |
+| OS             | **Ubuntu 24.04** (cloud image)                                                                   | cloud-init friendly, qemu-guest-agent for IPs |
+| CI/CD          | **Self-hosted GitLab CE + GitLab Runner**                                                        | Runs locally; no public IP required           |
+| Config Mgmt    | **Ansible** (ansible-core 2.18)                                                                  | Idempotent provisioning + deploy              |
+| Runtime        | **Node.js + pm2**                                                                                | Process manager with systemd startup          |
+| Web/Proxy      | **Nginx** (h5bp hardened)                                                                        | TLS termination + reverse proxy               |
+| TLS            | **OpenSSL** self-signed                                                                          | Local lab has no real domain                  |
 
 ---
 
@@ -230,23 +230,23 @@ curl -k https://node-app.local        # → Hello, World!
 
 ### Network plan
 
-| Component        | Address           | Notes                                  |
-| ---------------- | ----------------- | -------------------------------------- |
-| VM (webserver)   | `192.168.122.100` | Static, via cloud-init `network-config`|
-| libvirt gateway  | `192.168.122.1`   | Default NAT network                    |
-| GitLab (host)    | `gitlab.local`    | Maps to `127.0.0.1` on the host        |
-| Node.js (in VM)  | `127.0.0.1:3000`  | pm2-managed, behind Nginx              |
+| Component       | Address           | Notes                                   |
+| --------------- | ----------------- | --------------------------------------- |
+| VM (webserver)  | `192.168.122.100` | Static, via cloud-init `network-config` |
+| libvirt gateway | `192.168.122.1`   | Default NAT network                     |
+| GitLab (host)   | `gitlab.local`    | Maps to `127.0.0.1` on the host         |
+| Node.js (in VM) | `127.0.0.1:3000`  | pm2-managed, behind Nginx               |
 
 ### Key variables
 
-| Where               | Variable              | Default / Example                       |
-| ------------------- | --------------------- | --------------------------------------- |
-| `terraform.tfvars`  | `vm.ip_address`       | `192.168.122.100`                       |
-| `terraform.tfvars`  | `ssh_public_key_path` | `~/.ssh/id_rsa.pub`                     |
-| `ansible/group_vars/webservers.yml` | `deploy_dir` | `/opt/app`                  |
-| `ansible/group_vars/webservers.yml` | `web_user`   | `ubuntu`                   |
-| GitLab CI var       | `ENCODED_DEPLOY_SSH_KEY` | base64 of deploy private key         |
-| GitLab CI var       | `DEPLOY_HOST_KEYS`       | `ssh-keyscan` of the VM              |
+| Where                               | Variable                 | Default / Example            |
+| ----------------------------------- | ------------------------ | ---------------------------- |
+| `terraform.tfvars`                  | `vm.ip_address`          | `192.168.122.100`            |
+| `terraform.tfvars`                  | `ssh_public_key_path`    | `~/.ssh/id_rsa.pub`          |
+| `ansible/group_vars/webservers.yml` | `deploy_dir`             | `/opt/app`                   |
+| `ansible/group_vars/webservers.yml` | `web_user`               | `ubuntu`                     |
+| GitLab CI var                       | `ENCODED_DEPLOY_SSH_KEY` | base64 of deploy private key |
+| GitLab CI var                       | `DEPLOY_HOST_KEYS`       | `ssh-keyscan` of the VM      |
 
 ---
 
@@ -263,7 +263,7 @@ curl -k https://node-app.local        # → Hello, World!
 ## Troubleshooting
 
 - **Runner can't reach the VM** (`unreachable` in the job log) — confirm the runner has `network_mode = "host"` in `/etc/gitlab-runner/config.toml` and restart it, and that `192.168.122.0/24` is routable from the host.
-- **`ENCODED_DEPLOY_SSH_KEY` decrypts to garbage** — re-encode with `base64 -w 0 ~/.ssh/id_rsa` and paste as a single line; ensure the variable is set to *Masked*, not *File*.
+- **`ENCODED_DEPLOY_SSH_KEY` decrypts to garbage** — re-encode with `base64 -w 0 ~/.ssh/id_rsa` and paste as a single line; ensure the variable is set to _Masked_, not _File_.
 - **Job hangs on SSH host verification** — set `DEPLOY_HOST_KEYS` from a fresh `ssh-keyscan 192.168.122.100` and recheck `~/.ssh/known_hosts`.
 - **Terraform hangs reading the VM IP** — the qemu-guest-agent must be installed and running inside the VM (cloud-init installs it). `virsh qemu-agent-command <domain> '{"execute":"guest-ping"}'` should return a reply.
 - **Nginx won't start after deploy** — the cert generation is gated by `creates: /etc/nginx/certs/default.crt`; delete it to force regeneration, then re-run the nginx role.
